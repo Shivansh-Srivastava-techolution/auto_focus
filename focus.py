@@ -87,7 +87,9 @@ def fibonacci_search_focus(camera, roi):
     best_focus_metric = final_metric
     camera.set(cv2.CAP_PROP_FOCUS, final_focus)
     stop_optimization = True
+    _, focussed_image = camera.read()
     print(f"Best Focus Value: {best_focus_value}, Metric: {best_focus_metric}")
+    return best_focus_value, focussed_image
 
 def mouse_callback(event, x, y, flags, param):
     global points, roi
@@ -145,25 +147,36 @@ def main():
     if not ret:
         print("Failed to capture frame.")
         return
+    
     roi = manual_select_roi(frame)
     if not roi:
         print("No ROI selected.")
         return
+
     cv2.namedWindow("Live Feed", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Live Feed", 1280, 720)
+
+    def start_focus_optimization():
+        global stop_optimization, optimization_thread
+        stop_optimization = False
+        def run_optimization():
+            start_time = time.perf_counter()
+            fibonacci_search_focus(cap, roi)
+            stop_time = time.perf_counter()
+            print("Focus Time", stop_time - start_time)
+        optimization_thread = threading.Thread(target=run_optimization)
+        optimization_thread.start()
+
+    start_focus_optimization()
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+
         if not stop_optimization and (optimization_thread is None or not optimization_thread.is_alive()):
-            start_time = time.perf_counter()
-            def run_optimization():
-                fibonacci_search_focus(cap, roi)
-                stop_time = time.perf_counter()
-                print("Focus Time", stop_time - start_time)
-            optimization_thread = threading.Thread(target=run_optimization)
-            optimization_thread.start()
+            start_focus_optimization()
+
         x, y, w, h = roi
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.putText(frame, f"Best Focus: {best_focus_value}", (30, 30),
@@ -171,10 +184,20 @@ def main():
         cv2.putText(frame, f"Optimized: {stop_optimization}", (30, 70),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 2)
         cv2.imshow("Live Feed", frame)
-        key = cv2.waitKey(1)
-        if key == 27:
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:  # ESC key
             print("Exiting...")
             break
+        elif key == ord('f'):
+            print("Re-selecting ROI...")
+            stop_optimization = True
+            if optimization_thread and optimization_thread.is_alive():
+                optimization_thread.join()
+            roi = manual_select_roi(frame)
+            if roi:
+                start_focus_optimization()
+
     cap.release()
     cv2.destroyAllWindows()
 
